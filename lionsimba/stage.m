@@ -16,17 +16,13 @@ maxtime_discharge = 10000;
 % 休息的时间
 time_rest = 5000;
 
-% 恒流情况下的最大电压以及最大时间
-cutoverV_cc_charge = 4.2;
-maxtime_cc_charge = 10000;
-
-% 恒压情况下最大电压以及最大时间
-cutoverV_cv_charge = 5;
-maxtime_cv_charge = 10000;
-
 % 恒流情况下每1C对应多少电流，并且以多少倍这个标准的电流进行充电
 I1C = 29.23;
-C_rate = 1.5;
+% 各个阶段对应的电流
+C_grad = [1.5, 1.2, 0.9, 0.6, 0.4];
+voltage_limit = [3.9, 4.0, 4.1, 4.15, 4.2, 4.25]; %电压限值
+grads = length(C_grad);
+maxtime_charge = 10000;
 
 % 收集的实验数据
 curtime = 0;
@@ -50,43 +46,42 @@ for i=1:1:loopcnt
     out_rest = startSimulation(0, time_rest, initialState, 0, param);
     initialState = out_rest.initialState;
     
-    % 恒流充电
-    param{1}.CutoverVoltage = cutoverV_cc_charge;
-    out_cc_charge = startSimulation(0, maxtime_cc_charge, initialState, C_rate * I1C, param);
-    initialState = out_cc_charge.initialState;
-    
-    % 恒压充电
     param{1}.CutoverSOC = global_cutover_soc;
-    param{1}.JacobianFunction = [];
-    param2 = param;
-    param2{1}.OperatingMode = 3;
-    param2{1}.CutoverVoltage = cutoverV_cv_charge;
-    param2{1}.V_reference = out_cc_charge.Voltage{1}(end);
-    out_cv_charge = startSimulation(0, maxtime_cv_charge, initialState, 0, param2);
-    initialState = out_cv_charge.initialState;
+    out_charge = cell(1, grads);
+    % 恒流充电
+    for j=1:1:grads
+        charge_curr = C_grad(j) * I1C;
+        param{1}.CutoverVoltage = voltage_limit(j);
+        out_charge{j} = startSimulation(0, maxtime_charge, initialState, charge_curr, param);
+        initialState = out_charge{j}.initialState;
+        param{1}.JacobianFunction = out_charge{j}.JacobianFun;
+    end
+    
+    
     % 调整界限防止一开始就越界
     param{1}.CutoverSOC = global_cutover_soc + 1;
     param{1}.CutoffSOC = global_cutoff_soc;
-    param{1}.CutoverVoltage = cutoverV_cv_charge + 1;
+    param{1}.CutoverVoltage = voltage_limit(end) + 1;
     
     % 记录数据
     times = [times; out_discharge.time{1} + curtime];
     curtime = curtime + out_discharge.time{1}(end);
     times = [times; out_rest.time{1} + curtime];
     curtime = curtime + out_rest.time{1}(end);
-    times = [times; out_cc_charge.time{1} + curtime];
-    curtime = curtime + out_cc_charge.time{1}(end);
-    times = [times; out_cv_charge.time{1} + curtime];
-    curtime = curtime + out_cv_charge.time{1}(end);
 
-    currents = [currents; out_discharge.curr_density; out_rest.curr_density;
-        out_cc_charge.curr_density; out_cv_charge.curr_density];
-    voltages = [voltages; out_discharge.Voltage{1}; out_rest.Voltage{1};
-        out_cc_charge.Voltage{1}; out_cv_charge.Voltage{1}];
-    temperatures = [temperatures; out_discharge.Temperature{1}; out_rest.Temperature{1};
-        out_cc_charge.Temperature{1}; out_cv_charge.Temperature{1}];
-    socs = [socs; out_discharge.SOC{1}; out_rest.SOC{1}; out_cc_charge.SOC{1};
-        out_cv_charge.SOC{1}];
+    currents = [currents; out_discharge.curr_density; out_rest.curr_density];
+    voltages = [voltages; out_discharge.Voltage{1}; out_rest.Voltage{1}];
+    temperatures = [temperatures; out_discharge.Temperature{1}; out_rest.Temperature{1}];
+    socs = [socs; out_discharge.SOC{1}; out_rest.SOC{1}];
+    
+    for j=1:1:grads
+        times = [times; out_charge{j}.time{1} + curtime];
+        curtime = curtime + out_charge{j}.time{1}(end);
+        currents = [currents; out_charge{j}.curr_density];
+        voltages = [voltages; out_charge{j}.Voltage{1}];
+        temperatures = [temperatures; out_charge{j}.Temperature{1}];
+        socs = [socs; out_charge{j}.SOC{1}];
+    end
 end
 
 figure(1)
